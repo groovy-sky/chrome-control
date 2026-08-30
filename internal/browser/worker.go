@@ -57,6 +57,13 @@ var nonNetworkSchemes = map[string]bool{
 type Config struct {
 	// ChromePath is the Chromium executable. Empty means auto-detect.
 	ChromePath string
+	// Headful launches Chromium with a visible window instead of headless mode.
+	// Requires DISPLAY to be set. Intended for local debugging only.
+	Headful bool
+	// DebugHold, when positive, keeps the Chromium window open for this
+	// duration after extraction (and screenshot, if requested) completes.
+	// The hold is skipped for readiness probes. Intended for local debugging.
+	DebugHold time.Duration
 	// Artifacts stores screenshots. Required for capture_screenshot.
 	Artifacts *artifacts.Store
 	// Resolver performs destination DNS lookups.
@@ -300,6 +307,15 @@ func (w *Worker) run(ctx context.Context, req models.BrowserRequest) *models.Bro
 		result.ScreenshotArtifactID = id
 	}
 
+	// Debug hold: keep Chromium open for inspection before cleanup.
+	if w.cfg.DebugHold > 0 {
+		select {
+		case <-time.After(w.cfg.DebugHold):
+		case <-taskCtx.Done():
+		case <-ctx.Done():
+		}
+	}
+
 	return result
 }
 
@@ -347,7 +363,7 @@ func (w *Worker) navigationError(taskCtx context.Context, err error) *models.Bro
 func (w *Worker) createBrowserContext(parent context.Context, profileDir string) (context.Context, context.CancelFunc) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.UserDataDir(profileDir),
-		chromedp.Flag("headless", true),
+		chromedp.Flag("headless", !w.cfg.Headful),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("disable-extensions", true),
 		chromedp.Flag("disable-sync", true),

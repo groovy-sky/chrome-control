@@ -54,6 +54,13 @@ Environment variables:
 | `ARTIFACT_DIR` | `$TMPDIR/chrome-control-artifacts` | Screenshot storage |
 | `MAX_CONCURRENT_TASKS` | `4` | Concurrency ceiling |
 | `CHROME_PATH` | *(auto-detect)* | Chromium executable path |
+| `HEADFUL` | `false` | Launch Chromium with a visible window (**local debugging only**; requires `DISPLAY`) |
+| `DEBUG_HOLD_SECONDS` | `0` | Seconds to keep the Chromium window open after a task completes (**local debugging only**) |
+
+> ⚠️ **`HEADFUL` and `DEBUG_HOLD_SECONDS` are intended for local debugging only.**
+> Do not enable them in production. `HEADFUL` requires an X server reachable
+> via `DISPLAY`; `DEBUG_HOLD_SECONDS` delays task teardown and can exhaust
+> concurrency slots under load.
 
 ### Endpoints
 
@@ -193,6 +200,75 @@ Add the following to your `claude_desktop_config.json`:
 
 Replace `/path/to/chrome-control-mcp` with the absolute path to the built
 binary and adjust `CHROME_PATH` if Chromium is not on the default search path.
+
+---
+
+## GUI / headful mode (local debugging)
+
+The worker is **task-oriented**: it launches a fresh Chromium process per task
+and terminates it after the task (and optional debug hold) completes. It is not
+a persistent interactive browser.
+
+When `HEADFUL=true`, Chromium opens a visible window instead of running
+headless. This requires a running X server and a valid `DISPLAY` variable. The
+container uses the existing Chromium binary — no display server is bundled.
+
+`DEBUG_HOLD_SECONDS` keeps the window open for the specified number of seconds
+after extraction (and screenshot, if requested) finishes. The hold is
+cancellable: it respects task timeout and client disconnection. It does **not**
+apply to readiness probes.
+
+### Podman on Windows (X server example)
+
+**Prerequisites:**
+
+1. Install an X server on Windows, e.g. **VcXsrv** or **X410**.
+2. Start XLaunch → Multiple windows → Start no client → check *Disable access
+   control* (**private networks only — never on public/shared networks**).
+3. Allow the X server through Windows Firewall on private networks only.
+
+> ⚠️ **Security:** Disabling X access control allows any local process to
+> capture your screen and inject input. Never expose X11 TCP port 6000 on
+> public or untrusted networks.
+
+```powershell
+podman run --rm `
+  --name chrome-control-gui `
+  -p 127.0.0.1:8080:8080 `
+  -e HEADFUL=true `
+  -e DEBUG_HOLD_SECONDS=30 `
+  -e DISPLAY=host.containers.internal:0.0 `
+  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m `
+  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m `
+  --tmpfs /dev/shm:rw,size=256m `
+  --cap-drop ALL `
+  --security-opt no-new-privileges `
+  --pids-limit 512 `
+  --memory 1g `
+  --cpus 1 `
+  chrome-control
+```
+
+Submit a task:
+
+```powershell
+$body = @{
+    task_id = "gui-test"
+    url = "https://example.com"
+    capture_screenshot = $false
+    max_text_chars = 2000
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+    -Method Post `
+    -Uri "http://localhost:8080/v1/tasks" `
+    -ContentType "application/json" `
+    -Body $body
+```
+
+The Chromium window will appear on the Windows desktop and close automatically
+after `DEBUG_HOLD_SECONDS` seconds (or sooner if the task times out or the
+client disconnects).
 
 ---
 
