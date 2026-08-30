@@ -18,6 +18,7 @@ import (
 
 	"github.com/groovy-sky/chrome-control/internal/artifacts"
 	"github.com/groovy-sky/chrome-control/internal/browser"
+	"github.com/groovy-sky/chrome-control/internal/envutil"
 	"github.com/groovy-sky/chrome-control/internal/models"
 )
 
@@ -50,6 +51,8 @@ func main() {
 
 	w := browser.New(browser.Config{
 		ChromePath: os.Getenv("CHROME_PATH"),
+		Headful:    envutil.Bool(logger, "HEADFUL", false),
+		DebugHold:  envutil.HoldSeconds(logger, "DEBUG_HOLD_SECONDS", 0),
 		Artifacts:  store,
 		Logger:     logger,
 	})
@@ -227,10 +230,7 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 func envString(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
+	return envutil.String(key, fallback)
 }
 
 func envInt(key string, fallback int) int {
