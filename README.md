@@ -274,8 +274,73 @@ client disconnects).
 
 ## Docker
 
-The existing `Dockerfile` builds the HTTP worker (`cmd/worker`).  To add the
-MCP binary to your own image:
+The existing `Dockerfile` builds the HTTP worker (`cmd/worker`).
+
+### Run from GitHub Container Registry
+
+Pre-built HTTP worker images are published to GitHub Container Registry (GHCR)
+at `ghcr.io/groovy-sky/chrome-control` by the Docker publishing workflow.
+
+Pull the image built from the latest `main` branch commit:
+
+```sh
+docker pull ghcr.io/groovy-sky/chrome-control:main
+```
+
+Run it with the required writable temporary filesystems and recommended
+container restrictions:
+
+```sh
+docker run --rm \
+  --name chrome-control \
+  -p 127.0.0.1:8080:8080 \
+  --read-only \
+  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m \
+  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m \
+  --tmpfs /dev/shm:rw,size=256m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --pids-limit 512 \
+  --memory 1g \
+  --cpus 1 \
+  ghcr.io/groovy-sky/chrome-control:main
+```
+
+Verify the service and submit a task:
+
+```sh
+curl http://localhost:8080/readyz
+
+curl -X POST http://localhost:8080/v1/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"task_id":"ghcr-test","url":"https://example.com"}'
+```
+
+Version tags are also published when a Git tag matching `v*.*.*` is pushed. For
+example, Git tag `v1.2.3` publishes image tags including `1.2.3`, `1.2`, `1`,
+and `latest`. For reproducible deployments, prefer a full version or digest:
+
+```sh
+docker pull ghcr.io/groovy-sky/chrome-control:1.2.3
+```
+
+The same image can be run with Podman by replacing `docker` with `podman` in
+the commands above.
+
+If the package is private or otherwise requires authentication, create a GitHub
+personal access token with `read:packages`, then log in before pulling:
+
+```sh
+export CR_PAT=YOUR_TOKEN
+printf '%s' "$CR_PAT" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+```
+
+> **Host requirement:** The Chromium sandbox requires unprivileged user
+> namespaces. On Linux, ensure they are enabled on the container host. Keep
+> `CAP_SYS_ADMIN` and `CAP_NET_ADMIN` dropped, and enforce egress restrictions
+> with an external firewall or proxy.
+
+To add the MCP binary to your own image:
 
 ```dockerfile
 RUN go build -o /usr/local/bin/chrome-control-mcp ./cmd/mcp
