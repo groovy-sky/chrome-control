@@ -236,12 +236,32 @@ func (w *Worker) run(ctx context.Context, req models.BrowserRequest) *models.Bro
 		killProcessTree(chromeProc)
 	}()
 
-	// Start Chromium within the startup budget.
-	startCtx, cancelStart := context.WithTimeout(browserCtx, w.cfg.BrowserStartTimeout)
-	err = chromedp.Run(startCtx)
-	cancelStart()
-	if err != nil {
-		return fail(models.NewError(models.CodeBrowserStartFailed, "chromium did not start"))
+	// Start Chromium within the startup budget. We run chromedp.Run on
+	// browserCtx (not a child of it) so that the resulting browser target
+	// remains valid for the rest of the task. The timeout is enforced by
+	// racing the blocking call against a timer; on timeout we cancel the
+	// browser context to trigger cleanup.
+	startDone := make(chan error, 1)
+	go func() { startDone <- chromedp.Run(browserCtx) }()
+
+	startTimer := time.NewTimer(w.cfg.BrowserStartTimeout)
+	defer startTimer.Stop()
+
+	select {
+	case err = <-startDone:
+		if err != nil {
+			w.cfg.Logger.Debug("chromium startup error", slog.String("error", err.Error()))
+			return fail(models.NewError(models.CodeBrowserStartFailed, "chromium did not start"))
+		}
+	case <-startTimer.C:
+		cancelBrowser()
+		return fail(models.NewError(models.CodeBrowserStartFailed, "chromium startup timed out"))
+	case <-taskCtx.Done():
+		cancelBrowser()
+		if errors.Is(taskCtx.Err(), context.Canceled) {
+			return fail(models.NewError(models.CodeNavigationTimeout, "task cancelled by client"))
+		}
+		return fail(models.NewError(models.CodeTaskTimeout, "task timeout exceeded"))
 	}
 	if c := chromedp.FromContext(browserCtx); c != nil && c.Browser != nil {
 		chromeProc = c.Browser.Process()
@@ -254,6 +274,7 @@ func (w *Worker) run(ctx context.Context, req models.BrowserRequest) *models.Bro
 	if err := chromedp.Run(browserCtx, fetch.Enable().WithPatterns([]*fetch.RequestPattern{
 		{URLPattern: "*", RequestStage: fetch.RequestStageRequest},
 	})); err != nil {
+		w.cfg.Logger.Debug("could not enable request interception", slog.String("error", err.Error()))
 		return fail(models.NewError(models.CodeBrowserStartFailed, "could not enable request interception"))
 	}
 

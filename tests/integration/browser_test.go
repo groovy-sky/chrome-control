@@ -101,6 +101,34 @@ func TestProbeStartsChromiumWithSandbox(t *testing.T) {
 	}
 }
 
+// TestRequestInterceptionEnabledAfterStartup reproduces the regression where
+// canceling the startup child context invalidated the browser target, causing
+// fetch.Enable to return "could not enable request interception" on every task.
+func TestRequestInterceptionEnabledAfterStartup(t *testing.T) {
+	w := newWorker(t, browser.Config{
+		Resolver: publicResolver{},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// The request is blocked by policy (publicResolver returns a public IP,
+	// but the local test server URL would normally be blocked). We use a
+	// well-known blocked destination so the test does not need internet access
+	// but still exercises the full startup → interception path.
+	res := w.Run(ctx, models.BrowserRequest{
+		TaskID: "interception-regression",
+		URL:    "https://127.0.0.1/",
+	})
+	// The task must fail due to policy (blocked destination), NOT due to
+	// browser_start_failed / "could not enable request interception".
+	if res.Error == nil {
+		t.Fatalf("expected a policy-blocked failure, got success: %+v", res)
+	}
+	if res.Error.Code == models.CodeBrowserStartFailed {
+		t.Fatalf("regression: got browser_start_failed (%q); request interception must be enabled after startup", res.Error.Message)
+	}
+}
+
 func TestTaskBlocksLocalHTTPSServer(t *testing.T) {
 	srv := httptest.NewTLSServer(nil)
 	defer srv.Close()
