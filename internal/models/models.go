@@ -11,6 +11,26 @@ type BrowserRequest struct {
 	MaxTextChars      int    `json:"max_text_chars"`
 }
 
+// SessionRequest is the POST /v1/sessions request body.
+type SessionRequest struct {
+	URL               string `json:"url"`
+	CaptureScreenshot bool   `json:"capture_screenshot"`
+	MaxTextChars      int    `json:"max_text_chars"`
+}
+
+// SessionResponse is returned after a session is created successfully.
+type SessionResponse struct {
+	Token  string `json:"token"`
+	Status string `json:"status"`
+}
+
+// SessionStatus is returned by GET /v1/sessions/{token}.
+type SessionStatus struct {
+	Token  string         `json:"token"`
+	Status string         `json:"status"`
+	Result *BrowserResult `json:"result,omitempty"`
+}
+
 // VisibleLink is one extracted link.
 type VisibleLink struct {
 	Text string `json:"text"`
@@ -46,6 +66,8 @@ func NewError(code, message string) *BrowserError {
 const (
 	StatusCompleted = "completed"
 	StatusFailed    = "failed"
+	StatusWaiting   = "waiting"
+	StatusCancelled = "cancelled"
 )
 
 // Error codes.
@@ -62,6 +84,8 @@ const (
 	CodeScreenshotFailed      = "screenshot_failed"
 	CodeTaskTimeout           = "task_timeout"
 	CodeOverloaded            = "overloaded"
+	CodeSessionNotFound       = "session_not_found"
+	CodeSessionExpired        = "session_expired"
 )
 
 // HTTPStatusForCode maps an error code to the HTTP status defined by the API
@@ -77,6 +101,10 @@ func HTTPStatusForCode(code string) int {
 		return 400
 	case CodeOverloaded:
 		return 503
+	case CodeSessionNotFound:
+		return 404
+	case CodeSessionExpired:
+		return 410
 	case CodeNavigationTimeout, CodeTaskTimeout:
 		return 504
 	case CodeBrowserStartFailed, CodeExtractionFailed, CodeScreenshotFailed:

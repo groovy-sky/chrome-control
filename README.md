@@ -56,6 +56,8 @@ Environment variables:
 | `CHROME_PATH` | *(auto-detect)* | Chromium executable path |
 | `HEADFUL` | `false` | Launch Chromium with a visible window (**local debugging only**; requires `DISPLAY`) |
 | `DEBUG_HOLD_SECONDS` | `0` | Seconds to keep the Chromium window open after a task completes (**local debugging only**) |
+| `INTERACTIVE_TIMEOUT_SECONDS` | `300` | Maximum time (seconds) a session waits for `continue` before timing out |
+| `MAX_INTERACTIVE_SESSIONS` | `2` | Maximum number of concurrent interactive sessions |
 
 > ⚠️ **`HEADFUL` and `DEBUG_HOLD_SECONDS` are intended for local debugging only.**
 > Do not enable them in production. `HEADFUL` requires an X server reachable
@@ -65,9 +67,13 @@ Environment variables:
 ### Endpoints
 
 ```
-POST /v1/tasks   – submit a browsing task
-GET  /healthz    – liveness probe
-GET  /readyz     – readiness probe
+POST   /v1/tasks                       – submit a browsing task
+POST   /v1/sessions                    – create an interactive session
+GET    /v1/sessions/{token}            – get session status / result
+POST   /v1/sessions/{token}/continue   – signal the session to extract and return
+DELETE /v1/sessions/{token}            – cancel a session
+GET    /healthz                        – liveness probe
+GET    /readyz                         – readiness probe
 ```
 
 ### Example request
@@ -77,6 +83,188 @@ curl -X POST http://localhost:8080/v1/tasks \
   -H 'Content-Type: application/json' \
   -d '{"task_id":"t1","url":"https://example.com"}'
 ```
+
+---
+
+## Interactive sessions (CAPTCHA / manual browsing)
+
+Interactive sessions let you view and interact with the same Chromium instance
+used by a task, for example to solve a CAPTCHA, before extraction runs.
+
+### How it works
+
+```
+Host browser
+    │
+    │  http://127.0.0.1:6080/vnc.html   (noVNC image only)
+    ▼
+noVNC web client  →  VNC server  →  virtual X display  →  Chromium inside container
+```
+
+1. `POST /v1/sessions` – navigate to the URL and get a random opaque token.
+2. Open the noVNC URL in your host browser and interact with the page.
+3. `POST /v1/sessions/{token}/continue` – signal extraction to run.
+4. `GET /v1/sessions/{token}` – poll for the result, or read the JSON body
+   returned by the `/continue` response (status `202 Accepted`; poll for the
+   final result).
+5. After extraction (or timeout / cancellation) the Chromium process and
+   temporary profile are destroyed automatically.
+
+### API flow
+
+```sh
+# 1. Create a session
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/v1/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com","capture_screenshot":false}' \
+  | jq -r .token)
+
+echo "Session token: $TOKEN"
+
+# 2. (Open noVNC in host browser and interact with the page)
+#    http://127.0.0.1:6080/vnc.html
+
+# 3. Signal continuation (triggers extraction)
+curl -s -X POST "http://127.0.0.1:8080/v1/sessions/${TOKEN}/continue"
+
+# 4. Poll for the result
+curl -s "http://127.0.0.1:8080/v1/sessions/${TOKEN}"
+
+# 5. Cancel a session instead
+curl -s -X DELETE "http://127.0.0.1:8080/v1/sessions/${TOKEN}"
+```
+
+### Session states
+
+| Status | Meaning |
+|--------|---------|
+| `waiting` | Session is live; Chromium is at the URL, waiting for `/continue` |
+| `completed` | Extraction finished successfully |
+| `failed` | Navigation, extraction, or a policy violation failed the session |
+| `cancelled` | Explicit cancellation or service shutdown |
+
+> **Policy enforcement:** All URL/DNS/request-interception protections remain
+> active throughout the interactive phase.  A policy violation during manual
+> browsing immediately fails and invalidates the session.
+
+---
+
+## noVNC option
+
+The noVNC image lets you see and interact with the container's Chromium from
+any host browser without installing an X server.  It is a **separate,
+opt-in image** that adds Xvfb, x11vnc, and noVNC to the base image.
+
+> ⚠️ **Security notice:** noVNC provides interactive access to the browser
+> session and has **no built-in authentication**.  Always bind the noVNC port
+> to `127.0.0.1`.  Use an authenticated tunnel (SSH `-L`, mTLS proxy, VPN) if
+> remote access is required.
+
+### Build the noVNC image
+
+```sh
+# Docker
+docker build -f Dockerfile.novnc -t chrome-control:novnc .
+
+# Podman
+podman build -f Dockerfile.novnc -t chrome-control:novnc .
+```
+
+### Run the noVNC image
+
+```sh
+# Docker – bind both ports to localhost only
+docker run --rm \
+  --name chrome-control-novnc \
+  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:6080:6080 \
+  --read-only \
+  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m \
+  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m \
+  --tmpfs /dev/shm:rw,size=256m \
+  --tmpfs /tmp:rw,size=64m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --pids-limit 512 \
+  --memory 1g \
+  ghcr.io/groovy-sky/chrome-control:main-novnc
+```
+
+```sh
+# Podman equivalent
+podman run --rm \
+  --name chrome-control-novnc \
+  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:6080:6080 \
+  --read-only \
+  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m \
+  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m \
+  --tmpfs /dev/shm:rw,size=256m \
+  --tmpfs /tmp:rw,size=64m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --pids-limit 512 \
+  --memory 1g \
+  ghcr.io/groovy-sky/chrome-control:main-novnc
+```
+
+### Environment variables (noVNC image)
+
+All base-image variables apply, plus:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOVNC_PORT` | `6080` | Port the noVNC web interface listens on |
+| `DISPLAY` | `:99` | Virtual X display used by Chromium |
+| `INTERACTIVE_TIMEOUT_SECONDS` | `300` | Session timeout in seconds |
+| `MAX_INTERACTIVE_SESSIONS` | `2` | Max concurrent interactive sessions |
+
+### Full CAPTCHA workflow example
+
+```sh
+# 1. Start the noVNC container
+docker run --rm \
+  --name cc-novnc \
+  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:6080:6080 \
+  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m \
+  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m \
+  --tmpfs /dev/shm:rw,size=256m \
+  --tmpfs /tmp:rw,size=64m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  ghcr.io/groovy-sky/chrome-control:main-novnc &
+
+# 2. Wait for readiness
+until curl -sf http://127.0.0.1:8080/readyz > /dev/null; do sleep 1; done
+
+# 3. Create an interactive session
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/v1/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com/captcha-page"}' \
+  | jq -r .token)
+
+# 4. Open http://127.0.0.1:6080/vnc.html in your host browser
+#    Solve the CAPTCHA in the Chromium window shown by noVNC.
+#    (noVNC displays the container's Chromium – it is NOT a tab in your
+#    local Chrome; your mouse/keyboard events are forwarded to the container.)
+
+# 5. After solving, trigger extraction
+curl -s -X POST "http://127.0.0.1:8080/v1/sessions/${TOKEN}/continue"
+
+# 6. Poll until completed
+curl -s "http://127.0.0.1:8080/v1/sessions/${TOKEN}" | jq .
+```
+
+### Published image tags
+
+| Event | Tag example |
+|-------|------------|
+| Push to `main` | `ghcr.io/groovy-sky/chrome-control:main-novnc` |
+| Release `v1.2.3` | `ghcr.io/groovy-sky/chrome-control:1.2.3-novnc` |
+| Pull request | built only, not published |
+
+> The base image (`main`, `1.2.3`, `latest`) is unchanged by this feature.
 
 ---
 

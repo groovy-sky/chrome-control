@@ -1,0 +1,127 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.novnc – noVNC-capable variant of chrome-control.
+#
+# This image adds:
+#   • Xvfb      – virtual framebuffer X server
+#   • x11vnc    – VNC server that exposes the virtual display
+#   • websockify + noVNC – browser-accessible VNC client
+#
+# ⚠️  SECURITY WARNING
+# noVNC gives interactive access to the browser session running inside the
+# container.  Bind the noVNC port ONLY to 127.0.0.1 (all examples do this).
+# Do NOT expose it to untrusted networks without an authenticated tunnel
+# (e.g. SSH -L, mTLS proxy, or a VPN).  noVNC has no built-in authentication
+# in the default configuration.
+#
+# Exposed ports (not published by default; use -p 127.0.0.1:PORT:PORT):
+#   8080 – HTTP worker API
+#   6080 – noVNC web interface (configurable via NOVNC_PORT)
+
+# ---- build stage -------------------------------------------------------------
+FROM golang:1.26-bookworm AS build
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
+
+# ---- runtime stage -----------------------------------------------------------
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        chromium \
+        ca-certificates \
+        fonts-liberation \
+        fonts-dejavu-core \
+        tini \
+        xvfb \
+        x11vnc \
+        novnc \
+        python3-websockify \
+    && rm -rf /var/lib/apt/lists/*
+
+# Dedicated non-root user (same UID as the base image for consistency).
+RUN groupadd --system --gid 10001 worker \
+    && useradd --system --uid 10001 --gid worker \
+        --home-dir /home/worker --create-home worker
+
+COPY --from=build /out/worker /usr/local/bin/worker
+
+# Entrypoint: Xvfb → x11vnc → noVNC proxy → worker (foreground).
+# tini manages the process group; SIGTERM shuts everything down cleanly.
+COPY <<'SCRIPT' /usr/local/bin/chrome-control-novnc
+#!/bin/sh
+set -e
+
+# --- Start virtual display ---
+Xvfb :99 -screen 0 1920x1080x24 -ac &
+XVFB_PID=$!
+
+# Wait up to 10 seconds for the X socket to appear.
+i=0
+while [ ! -e /tmp/.X11-unix/X99 ]; do
+    if [ $i -ge 100 ]; then
+        echo "ERROR: Xvfb did not start within 10 seconds" >&2
+        exit 1
+    fi
+    sleep 0.1
+    i=$((i + 1))
+done
+
+# --- Start VNC server (loopback only; noVNC proxies the external connection) ---
+x11vnc -display :99 -forever -shared -nopw -rfbport 5900 -listen 127.0.0.1 &
+
+# --- Start noVNC web proxy ---
+NOVNC_PORT="${NOVNC_PORT:-6080}"
+websockify --web /usr/share/novnc "${NOVNC_PORT}" 127.0.0.1:5900 &
+
+# --- Run the HTTP worker in the foreground ---
+exec /usr/local/bin/worker
+SCRIPT
+
+RUN chmod +x /usr/local/bin/chrome-control-novnc \
+    && mkdir -p /var/tmp/chrome-control /var/lib/chrome-control/artifacts \
+    && chown -R worker:worker /var/tmp/chrome-control /var/lib/chrome-control
+
+ENV DISPLAY=:99 \
+    CHROME_PATH=/usr/bin/chromium \
+    ARTIFACT_DIR=/var/lib/chrome-control/artifacts \
+    TMPDIR=/var/tmp/chrome-control \
+    ADDR=:8080 \
+    MAX_CONCURRENT_TASKS=4 \
+    HEADFUL=true \
+    NOVNC_PORT=6080
+
+USER worker
+WORKDIR /home/worker
+EXPOSE 8080 6080
+
+# tini reaps the process tree when SIGTERM is received.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/chrome-control-novnc"]
+
+# Recommended invocation – bind BOTH ports to localhost only:
+#
+#   docker run --rm \
+#     --name chrome-control-novnc \
+#     -p 127.0.0.1:8080:8080 \
+#     -p 127.0.0.1:6080:6080 \
+#     --read-only \
+#     --tmpfs /var/tmp/chrome-control:rw,exec,size=512m \
+#     --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m \
+#     --tmpfs /dev/shm:rw,size=256m \
+#     --tmpfs /tmp:rw,size=64m \
+#     --cap-drop ALL \
+#     --security-opt no-new-privileges \
+#     --pids-limit 512 \
+#     --memory 1g \
+#     ghcr.io/groovy-sky/chrome-control:main-novnc
+#
+# Then open http://127.0.0.1:6080/vnc.html in your host browser.
+#
+# ⚠️  Never publish port 6080 or 5900 to 0.0.0.0 without an
+#     authenticated tunnel; noVNC has no built-in authentication.
