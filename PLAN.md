@@ -341,8 +341,8 @@ For this MVP, **visible text** means `document.body.innerText`. Text limits are 
 A **visible link** must:
 
 - Have an absolute `http` or `https` URL.
-- Have a rendered layout box (`offsetParent !== null` or equivalent).
-- Not be hidden by `display: none`, `visibility: hidden`, or a hidden ancestor.
+- Have non-zero dimensions per `getBoundingClientRect()`.
+- Not have `display: none`, `visibility: hidden`, or `opacity: 0` in its computed style.
 
 Links are normalized (resolved against the page's base URL), deduplicated while preserving document order, and then truncated to the 100-link limit.
 
@@ -367,10 +367,14 @@ func extractPage(ctx context.Context, maxChars int) (
 				return Array.from(document.querySelectorAll("a[href]"))
 					.filter(a => {
 						const u = a.href;
-						return (u.startsWith("https://") || u.startsWith("http://"))
-							&& a.offsetParent !== null
-							&& !seen.has(u)
-							&& seen.add(u);
+						if (!(u.startsWith("https://") || u.startsWith("http://"))) return false;
+						if (seen.has(u)) return false;
+						const rect = a.getBoundingClientRect();
+						if (rect.width === 0 && rect.height === 0) return false;
+						const style = getComputedStyle(a);
+						if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+						seen.add(u);
+						return true;
 					})
 					.slice(0, 100)
 					.map(a => ({text: (a.innerText || "").trim(), url: a.href}));
@@ -435,7 +439,7 @@ func isBlockedAddr(addr netip.Addr) bool {
 		netip.MustParsePrefix("fc00::/7"),
 		netip.MustParsePrefix("fe80::/10"),
 		netip.MustParsePrefix("ff00::/8"),
-		netip.MustParsePrefix("fd00:ec2::/32"),
+		netip.MustParsePrefix("fd00:ec2::254/128"),
 	}
 	for _, p := range blocked {
 		if p.Contains(addr) {
