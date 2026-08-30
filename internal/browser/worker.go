@@ -326,7 +326,9 @@ func (w *Worker) screenshot(ctx context.Context) (string, *models.BrowserError) 
 func (w *Worker) navigationError(taskCtx context.Context, err error) *models.BrowserError {
 	if taskCtx.Err() != nil {
 		if errors.Is(taskCtx.Err(), context.Canceled) {
-			return models.NewError(models.CodeTaskTimeout, "task cancelled")
+			// Client disconnected (request context cancelled). Use
+			// CodeNavigationTimeout so callers receive 504, not 500.
+			return models.NewError(models.CodeNavigationTimeout, "task cancelled by client")
 		}
 		return models.NewError(models.CodeTaskTimeout, "task timeout exceeded")
 	}

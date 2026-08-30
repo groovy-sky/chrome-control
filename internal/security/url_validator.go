@@ -109,8 +109,9 @@ var blockedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("203.0.113.0/24"),
 	netip.MustParsePrefix("198.18.0.0/15"),
 	netip.MustParsePrefix("240.0.0.0/4"),
-	// AWS IPv6 metadata endpoint.
-	netip.MustParsePrefix("fd00:ec2::254/128"),
+	// AWS IPv6 metadata range (fd00:ec2::/32 covers the full metadata prefix;
+	// the well-known single address fd00:ec2::254 falls within it).
+	netip.MustParsePrefix("fd00:ec2::/32"),
 }
 
 // blockedHosts are names that must never be resolved or navigated to.

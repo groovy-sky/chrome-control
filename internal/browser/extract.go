@@ -10,7 +10,10 @@ import (
 
 // Extraction limits.
 const (
-	// DefaultMaxTextChars is used when the request omits max_text_chars.
+	// DefaultMaxTextChars is used when the request omits max_text_chars or sets it to 0.
+	// It is intentionally equal to ServerMaxTextChars: the default is the maximum.
+	// Changing either constant independently without updating the other will cause
+	// clamping behaviour to diverge from the documented default, so both must stay in sync.
 	DefaultMaxTextChars = 20000
 	// ServerMaxTextChars is the server-side ceiling for max_text_chars.
 	ServerMaxTextChars = 20000
