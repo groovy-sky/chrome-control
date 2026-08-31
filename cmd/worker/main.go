@@ -31,6 +31,7 @@ const (
 
 type server struct {
 	worker   *browser.Worker
+	sessions *browser.SessionManager
 	store    *artifacts.Store
 	logger   *slog.Logger
 	slots    chan struct{}
@@ -62,15 +63,25 @@ func main() {
 		maxConcurrent = 1
 	}
 
+	interactiveTimeout := envutil.HoldSeconds(logger, "INTERACTIVE_TIMEOUT_SECONDS", browser.DefaultInteractiveTimeout)
+	maxInteractive := envInt("MAX_INTERACTIVE_SESSIONS", browser.DefaultMaxInteractiveSessions)
+
+	sessionMgr := browser.NewSessionManager(w, interactiveTimeout, maxInteractive, logger)
+
 	srv := &server{
-		worker: w,
-		store:  store,
-		logger: logger,
-		slots:  make(chan struct{}, maxConcurrent),
+		worker:   w,
+		sessions: sessionMgr,
+		store:    store,
+		logger:   logger,
+		slots:    make(chan struct{}, maxConcurrent),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/tasks", srv.handleTask)
+	mux.HandleFunc("POST /v1/sessions", srv.handleCreateSession)
+	mux.HandleFunc("GET /v1/sessions/{token}", srv.handleGetSession)
+	mux.HandleFunc("POST /v1/sessions/{token}/continue", srv.handleContinueSession)
+	mux.HandleFunc("DELETE /v1/sessions/{token}", srv.handleCancelSession)
 	mux.HandleFunc("GET /healthz", srv.handleHealthz)
 	mux.HandleFunc("GET /readyz", srv.handleReadyz)
 
@@ -123,6 +134,7 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", slog.String("error", err.Error()))
 	}
+	sessionMgr.Shutdown()
 	logger.Info("shutdown complete")
 }
 
@@ -243,4 +255,75 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// handleCreateSession handles POST /v1/sessions.
+func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	if !validJSONContentType(r.Header.Get("Content-Type")) {
+		writeSessionError(w, models.NewError(models.CodeInvalidRequest, "Content-Type must be application/json"),
+			http.StatusUnsupportedMediaType)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	var req models.SessionRequest
+	if err := dec.Decode(&req); err != nil {
+		writeSessionError(w, models.NewError(models.CodeInvalidRequest, "request body is not valid JSON for this API"),
+			http.StatusBadRequest)
+		return
+	}
+
+	token, berr := s.sessions.Create(r.Context(), req)
+	if berr != nil {
+		writeSessionError(w, berr, models.HTTPStatusForCode(berr.Code))
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, &models.SessionResponse{
+		Token:  token,
+		Status: models.StatusWaiting,
+	})
+}
+
+// handleGetSession handles GET /v1/sessions/{token}.
+func (s *server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	status, berr := s.sessions.Status(token)
+	if berr != nil {
+		writeSessionError(w, berr, models.HTTPStatusForCode(berr.Code))
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+// handleContinueSession handles POST /v1/sessions/{token}/continue.
+func (s *server) handleContinueSession(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	berr := s.sessions.Continue(token)
+	if berr != nil {
+		writeSessionError(w, berr, models.HTTPStatusForCode(berr.Code))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "continuing"})
+}
+
+// handleCancelSession handles DELETE /v1/sessions/{token}.
+func (s *server) handleCancelSession(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	berr := s.sessions.Cancel(token)
+	if berr != nil {
+		writeSessionError(w, berr, models.HTTPStatusForCode(berr.Code))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeSessionError(w http.ResponseWriter, berr *models.BrowserError, status int) {
+	writeJSON(w, status, &models.SessionStatus{
+		Status: models.StatusFailed,
+		Result: &models.BrowserResult{Status: models.StatusFailed, Error: berr},
+	})
 }
