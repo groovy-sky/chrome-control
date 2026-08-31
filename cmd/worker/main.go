@@ -66,7 +66,10 @@ func main() {
 	interactiveTimeout := envutil.HoldSeconds(logger, "INTERACTIVE_TIMEOUT_SECONDS", browser.DefaultInteractiveTimeout)
 	maxInteractive := envInt("MAX_INTERACTIVE_SESSIONS", browser.DefaultMaxInteractiveSessions)
 
-	sessionMgr := browser.NewSessionManager(w, interactiveTimeout, maxInteractive, logger)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	sessionMgr := browser.NewSessionManager(w, ctx, interactiveTimeout, maxInteractive, logger)
 
 	srv := &server{
 		worker:   w,
@@ -106,9 +109,6 @@ func main() {
 		srv.ready.Store(true)
 		logger.Info("worker is ready", slog.Int("max_concurrent_tasks", maxConcurrent))
 	}()
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -276,7 +276,7 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, berr := s.sessions.Create(r.Context(), req)
+	token, berr := s.sessions.Create(req)
 	if berr != nil {
 		writeSessionError(w, berr, models.HTTPStatusForCode(berr.Code))
 		return

@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	DefaultInteractiveTimeout  = 5 * time.Minute
+	DefaultInteractiveTimeout     = 60 * time.Minute
 	DefaultMaxInteractiveSessions = 2
 )
 
@@ -38,10 +38,11 @@ type sessionState struct {
 
 // SessionManager keeps track of live interactive sessions.
 type SessionManager struct {
-	worker  *Worker
-	timeout time.Duration
-	slots   chan struct{} // bounded concurrency
-	logger  *slog.Logger
+	worker     *Worker
+	timeout    time.Duration
+	slots      chan struct{} // bounded concurrency
+	logger     *slog.Logger
+	serviceCtx context.Context // lives until process shutdown
 
 	mu       sync.Mutex
 	sessions map[string]*sessionState
@@ -53,7 +54,12 @@ type SessionManager struct {
 }
 
 // NewSessionManager creates a SessionManager backed by the given Worker.
-func NewSessionManager(w *Worker, timeout time.Duration, maxSessions int, logger *slog.Logger) *SessionManager {
+// serviceCtx must remain valid for the life of the process; it is canceled on
+// shutdown and propagated to all active sessions so they are cleaned up.
+func NewSessionManager(w *Worker, serviceCtx context.Context, timeout time.Duration, maxSessions int, logger *slog.Logger) *SessionManager {
+	if serviceCtx == nil {
+		serviceCtx = context.Background()
+	}
 	if timeout <= 0 {
 		timeout = DefaultInteractiveTimeout
 	}
@@ -64,18 +70,19 @@ func NewSessionManager(w *Worker, timeout time.Duration, maxSessions int, logger
 		logger = slog.Default()
 	}
 	return &SessionManager{
-		worker:   w,
-		timeout:  timeout,
-		slots:    make(chan struct{}, maxSessions),
-		logger:   logger,
-		sessions: make(map[string]*sessionState),
+		worker:     w,
+		timeout:    timeout,
+		slots:      make(chan struct{}, maxSessions),
+		logger:     logger,
+		serviceCtx: serviceCtx,
+		sessions:   make(map[string]*sessionState),
 	}
 }
 
 // Create validates the request, acquires a concurrency slot, registers a new
 // session and starts the background browser goroutine.  It returns the opaque
 // token or an error.
-func (m *SessionManager) Create(ctx context.Context, req models.SessionRequest) (string, *models.BrowserError) {
+func (m *SessionManager) Create(req models.SessionRequest) (string, *models.BrowserError) {
 	if req.URL == "" {
 		return "", models.NewError(models.CodeInvalidRequest, "url is required")
 	}
@@ -108,7 +115,7 @@ func (m *SessionManager) Create(ctx context.Context, req models.SessionRequest) 
 	m.sessions[token] = s
 	m.mu.Unlock()
 
-	go m.runSession(ctx, s)
+	go m.runSession(m.serviceCtx, s)
 
 	return token, nil
 }
