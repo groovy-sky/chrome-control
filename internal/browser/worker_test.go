@@ -14,7 +14,9 @@ func TestStartInteractive_SuppliedAboutBlankIsRejected(t *testing.T) {
 	res, browserCtx, cancelBrowser, cleanup, policy := w.startInteractive(context.Background(), models.SessionRequest{
 		URL: interactiveBootstrapURL,
 	})
-	defer cancelBrowser()
+	if cancelBrowser != nil {
+		defer cancelBrowser()
+	}
 	if cleanup != nil {
 		defer cleanup()
 	}

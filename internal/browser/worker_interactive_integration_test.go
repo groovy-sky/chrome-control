@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,13 +112,15 @@ func TestStartInteractive_BlankSessionStartsOnAboutBlank(t *testing.T) {
 	if err := chromedp.Run(browserCtx, chromedp.Location(&location)); err != nil {
 		t.Fatalf("Location: %v", err)
 	}
-	if location != interactiveBootstrapURL {
-		t.Fatalf("got bootstrap URL %q, want %q", location, interactiveBootstrapURL)
+	if got := strings.TrimRight(location, "#"); !strings.HasPrefix(got, interactiveBootstrapURL) {
+		t.Fatalf("got bootstrap URL %q, want prefix %q", got, interactiveBootstrapURL)
 	}
 }
 
 func TestExtractAfterInteraction_BlockedManualNavigationFailsClosed(t *testing.T) {
-	w := newIntegrationWorker(t, Config{})
+	w := newIntegrationWorker(t, Config{
+		Resolver: denyAllResolver{},
+	})
 	requireInteractiveBrowser(t, w)
 
 	res, browserCtx, cancelBrowser, cleanup, policy := w.startInteractive(context.Background(), models.SessionRequest{})
@@ -183,6 +186,8 @@ func TestExtractAfterInteraction_ManualPublicNavigationWorks(t *testing.T) {
 }
 
 func TestStartInteractive_SuppliedURLStillValidates(t *testing.T) {
+	// This path must fail during pre-launch validation, so no browser probe is
+	// required here.
 	w := New(Config{})
 	res, browserCtx, cancelBrowser, cleanup, policy := w.startInteractive(context.Background(), models.SessionRequest{
 		URL: "https://127.0.0.1/",
