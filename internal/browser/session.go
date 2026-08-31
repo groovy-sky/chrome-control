@@ -1,7 +1,8 @@
 // Package browser – session.go manages interactive browsing sessions.
 //
-// An interactive session navigates to a URL and then pauses, keeping Chromium
-// alive, so the operator can interact with the page (e.g. to solve a CAPTCHA).
+// An interactive session optionally navigates to a URL, then pauses while
+// keeping Chromium alive so the operator can interact with the page (e.g. to
+// solve a CAPTCHA or manually browse from about:blank).
 // The caller obtains a cryptographically random opaque token, then signals
 // continuation via that token.  On continuation, extraction runs and the result
 // is stored on the session.  A configurable timeout and explicit cancel both
@@ -83,9 +84,6 @@ func NewSessionManager(w *Worker, serviceCtx context.Context, timeout time.Durat
 // session and starts the background browser goroutine.  It returns the opaque
 // token or an error.
 func (m *SessionManager) Create(req models.SessionRequest) (string, *models.BrowserError) {
-	if req.URL == "" {
-		return "", models.NewError(models.CodeInvalidRequest, "url is required")
-	}
 	if req.MaxTextChars < 0 {
 		return "", models.NewError(models.CodeInvalidRequest, "max_text_chars must not be negative")
 	}
@@ -227,8 +225,9 @@ func (m *SessionManager) remove(token string) {
 }
 
 // runSession is the goroutine that drives the browser for one interactive
-// session.  It navigates to the URL, waits for a continue/cancel/timeout
-// signal, and then either extracts the page or fails closed.
+// session. It launches Chromium on the requested URL or a local blank bootstrap
+// page, waits for a continue/cancel/timeout signal, and then either extracts
+// the current page or fails closed.
 func (m *SessionManager) runSession(serviceCtx context.Context, s *sessionState) {
 	if m.TestHookRunSession != nil {
 		m.TestHookRunSession()
@@ -255,7 +254,7 @@ func (m *SessionManager) runSession(serviceCtx context.Context, s *sessionState)
 	}
 
 	// Validate + navigate using a background browser run.
-	result, browserCtx, cancelBrowser, cleanup := m.worker.startInteractive(serviceCtx, s.req)
+	result, browserCtx, cancelBrowser, cleanup, policy := m.worker.startInteractive(serviceCtx, s.req)
 	defer func() {
 		cancelBrowser()
 		if cleanup != nil {
@@ -289,7 +288,7 @@ func (m *SessionManager) runSession(serviceCtx context.Context, s *sessionState)
 	}
 
 	// Extract now that the operator is done.
-	res := m.worker.extractAfterInteraction(browserCtx, s.req)
+	res := m.worker.extractAfterInteraction(browserCtx, s.req, policy)
 	s.mu.Lock()
 	if res.Error != nil {
 		s.status = models.StatusFailed
