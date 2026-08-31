@@ -58,6 +58,11 @@ COPY <<'SCRIPT' /usr/local/bin/chrome-control-novnc
 #!/bin/sh
 set -e
 
+# Ensure the X11 socket directory exists before starting Xvfb when running as
+# non-root with a tmpfs-backed /tmp.
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix
+
 # --- Start virtual display ---
 Xvfb :99 -screen 0 1920x1080x24 -ac &
 XVFB_PID=$!
@@ -111,10 +116,10 @@ ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/chrome-control-novnc"]
 #     -p 127.0.0.1:8080:8080 \
 #     -p 127.0.0.1:6080:6080 \
 #     --read-only \
-#     --tmpfs /var/tmp/chrome-control:rw,exec,size=512m \
-#     --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m \
-#     --tmpfs /dev/shm:rw,size=256m \
-#     --tmpfs /tmp:rw,size=64m \
+#     --tmpfs /var/tmp/chrome-control:rw,exec,size=512m,mode=1777 \
+#     --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m,mode=1777 \
+#     --tmpfs /dev/shm:rw,size=256m,mode=1777 \
+#     --tmpfs /tmp:rw,size=64m,mode=1777 \
 #     --cap-drop ALL \
 #     --security-opt no-new-privileges \
 #     --pids-limit 512 \
