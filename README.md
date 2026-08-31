@@ -179,10 +179,10 @@ docker run --rm \
   -p 127.0.0.1:8080:8080 \
   -p 127.0.0.1:6080:6080 \
   --read-only \
-  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m \
-  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m \
-  --tmpfs /dev/shm:rw,size=256m \
-  --tmpfs /tmp:rw,size=64m \
+  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m,mode=1777 \
+  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m,mode=1777 \
+  --tmpfs /dev/shm:rw,size=256m,mode=1777 \
+  --tmpfs /tmp:rw,size=64m,mode=1777 \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   --pids-limit 512 \
@@ -197,10 +197,10 @@ podman run --rm \
   -p 127.0.0.1:8080:8080 \
   -p 127.0.0.1:6080:6080 \
   --read-only \
-  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m \
-  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m \
-  --tmpfs /dev/shm:rw,size=256m \
-  --tmpfs /tmp:rw,size=64m \
+  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m,mode=1777 \
+  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m,mode=1777 \
+  --tmpfs /dev/shm:rw,size=256m,mode=1777 \
+  --tmpfs /tmp:rw,size=64m,mode=1777 \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   --pids-limit 512 \
@@ -227,10 +227,10 @@ docker run --rm \
   --name cc-novnc \
   -p 127.0.0.1:8080:8080 \
   -p 127.0.0.1:6080:6080 \
-  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m \
-  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m \
-  --tmpfs /dev/shm:rw,size=256m \
-  --tmpfs /tmp:rw,size=64m \
+  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m,mode=1777 \
+  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m,mode=1777 \
+  --tmpfs /dev/shm:rw,size=256m,mode=1777 \
+  --tmpfs /tmp:rw,size=64m,mode=1777 \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   ghcr.io/groovy-sky/chrome-control:main-novnc &
@@ -245,6 +245,7 @@ TOKEN=$(curl -s -X POST http://127.0.0.1:8080/v1/sessions \
   | jq -r .token)
 
 # 4. Open http://127.0.0.1:6080/vnc.html in your host browser
+#    (the web-root URL http://127.0.0.1:6080/ may return a harmless 404)
 #    Solve the CAPTCHA in the Chromium window shown by noVNC.
 #    (noVNC displays the container's Chromium – it is NOT a tab in your
 #    local Chrome; your mouse/keyboard events are forwarded to the container.)
@@ -426,9 +427,10 @@ podman run --rm `
   -e HEADFUL=true `
   -e DEBUG_HOLD_SECONDS=30 `
   -e DISPLAY=host.containers.internal:0.0 `
-  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m `
-  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m `
-  --tmpfs /dev/shm:rw,size=256m `
+  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m,mode=1777 `
+  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m,mode=1777 `
+  --tmpfs /dev/shm:rw,size=256m,mode=1777 `
+  --tmpfs /tmp:rw,size=64m,mode=1777 `
   --cap-drop ALL `
   --security-opt no-new-privileges `
   --pids-limit 512 `
@@ -483,9 +485,10 @@ docker run --rm \
   --name chrome-control \
   -p 127.0.0.1:8080:8080 \
   --read-only \
-  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m \
-  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m \
-  --tmpfs /dev/shm:rw,size=256m \
+  --tmpfs /var/tmp/chrome-control:rw,exec,size=512m,mode=1777 \
+  --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m,mode=1777 \
+  --tmpfs /dev/shm:rw,size=256m,mode=1777 \
+  --tmpfs /tmp:rw,size=64m,mode=1777 \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   --pids-limit 512 \

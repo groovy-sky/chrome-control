@@ -53,9 +53,10 @@ ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/worker"]
 #
 #   docker run \
 #     --read-only \
-#     --tmpfs /var/tmp/chrome-control:rw,exec,size=512m \
-#     --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m \
-#     --tmpfs /dev/shm:rw,size=256m \
+#     --tmpfs /var/tmp/chrome-control:rw,exec,size=512m,mode=1777 \
+#     --tmpfs /var/lib/chrome-control/artifacts:rw,noexec,size=64m,mode=1777 \
+#     --tmpfs /dev/shm:rw,size=256m,mode=1777 \
+#     --tmpfs /tmp:rw,size=64m,mode=1777 \
 #     --cap-drop ALL \
 #     --security-opt no-new-privileges \
 #     --pids-limit 512 --memory 1g --cpus 1 \
