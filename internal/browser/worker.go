@@ -40,6 +40,8 @@ const (
 	// MaxTaskIDLength bounds the client-supplied task identifier. The value
 	// is never used in a filesystem path.
 	MaxTaskIDLength = 128
+
+	interactiveBootstrapURL = "about:blank"
 )
 
 // nonNetworkSchemes are schemes that never leave the browser and therefore
@@ -514,36 +516,40 @@ func (w *Worker) Probe(ctx context.Context) error {
 	return nil
 }
 
-// startInteractive validates the URL, creates a fresh Chromium process,
-// enables request interception, and navigates to the requested URL.
+// startInteractive validates the requested interactive destination when one was
+// supplied, creates a fresh Chromium process, enables request interception, and
+// navigates either to that URL or to a local about:blank bootstrap page.
 //
-// On success it returns (nil, browserCtx, cancelFn, cleanupFn).
-// On failure it returns (*BrowserResult with error, nil, no-op, no-op).
+// On success it returns (nil, browserCtx, cancelFn, cleanupFn, policy).
+// On failure it returns (*BrowserResult with error, nil, no-op, no-op, nil).
 //
 // The caller owns browserCtx and must call cancelBrowser() when done, followed
 // by cleanup() to remove the profile directory.
 func (w *Worker) startInteractive(
 	serviceCtx context.Context,
 	req models.SessionRequest,
-) (failed *models.BrowserResult, browserCtx context.Context, cancelBrowser context.CancelFunc, cleanup func()) {
+) (failed *models.BrowserResult, browserCtx context.Context, cancelBrowser context.CancelFunc, cleanup func(), policy *policyState) {
 	noop := func() {}
 
 	if w == nil {
 		return &models.BrowserResult{
 			Status: models.StatusFailed,
 			Error:  models.NewError(models.CodeBrowserStartFailed, "browser worker not configured"),
-		}, nil, noop, noop
+		}, nil, noop, noop, nil
 	}
 
-	if err := security.ValidateURLContext(serviceCtx, req.URL, w.cfg.Resolver); err != nil {
+	navURL := req.URL
+	if navURL == "" {
+		navURL = interactiveBootstrapURL
+	} else if err := security.ValidateURLContext(serviceCtx, navURL, w.cfg.Resolver); err != nil {
 		var perr *security.Error
 		if errors.As(err, &perr) {
-			return &models.BrowserResult{Status: models.StatusFailed, Error: perr.BrowserError()}, nil, noop, noop
+			return &models.BrowserResult{Status: models.StatusFailed, Error: perr.BrowserError()}, nil, noop, noop, nil
 		}
 		return &models.BrowserResult{
 			Status: models.StatusFailed,
 			Error:  models.NewError(models.CodeInvalidURL, "destination could not be validated"),
-		}, nil, noop, noop
+		}, nil, noop, noop, nil
 	}
 
 	profileDir, err := os.MkdirTemp("", "chrome-control-profile-")
@@ -551,7 +557,7 @@ func (w *Worker) startInteractive(
 		return &models.BrowserResult{
 			Status: models.StatusFailed,
 			Error:  models.NewError(models.CodeBrowserStartFailed, "could not create browser profile directory"),
-		}, nil, noop, noop
+		}, nil, noop, noop, nil
 	}
 	cleanupFn := func() { os.RemoveAll(profileDir) }
 
@@ -577,7 +583,7 @@ func (w *Worker) startInteractive(
 			return &models.BrowserResult{
 				Status: models.StatusFailed,
 				Error:  models.NewError(models.CodeBrowserStartFailed, "chromium did not start"),
-			}, nil, noop, noop
+			}, nil, noop, noop, nil
 		}
 	case <-startTimer.C:
 		cancelAndKill()
@@ -585,21 +591,21 @@ func (w *Worker) startInteractive(
 		return &models.BrowserResult{
 			Status: models.StatusFailed,
 			Error:  models.NewError(models.CodeBrowserStartFailed, "chromium startup timed out"),
-		}, nil, noop, noop
+		}, nil, noop, noop, nil
 	case <-serviceCtx.Done():
 		cancelAndKill()
 		cleanupFn()
 		return &models.BrowserResult{
 			Status: models.StatusFailed,
 			Error:  models.NewError(models.CodeTaskTimeout, "service shutting down"),
-		}, nil, noop, noop
+		}, nil, noop, noop, nil
 	}
 
 	if c := chromedp.FromContext(bCtx); c != nil && c.Browser != nil {
 		chromeProc = c.Browser.Process()
 	}
 
-	policy := &policyState{}
+	policy = &policyState{}
 	redirects := NewRedirectTracker(MaxRedirects)
 	w.interceptRequests(bCtx, policy, redirects)
 
@@ -611,41 +617,56 @@ func (w *Worker) startInteractive(
 		return &models.BrowserResult{
 			Status: models.StatusFailed,
 			Error:  models.NewError(models.CodeBrowserStartFailed, "could not enable request interception"),
-		}, nil, noop, noop
+		}, nil, noop, noop, nil
 	}
 
 	navCtx, cancelNav := context.WithTimeout(bCtx, w.cfg.NavigationTimeout)
-	navErr := chromedp.Run(navCtx, chromedp.Navigate(req.URL))
+	navErr := chromedp.Run(navCtx, chromedp.Navigate(navURL))
 	cancelNav()
 
 	if v := policy.violation(); v != nil {
 		cancelAndKill()
 		cleanupFn()
-		return &models.BrowserResult{Status: models.StatusFailed, Error: v}, nil, noop, noop
+		return &models.BrowserResult{Status: models.StatusFailed, Error: v}, nil, noop, noop, nil
 	}
 	if navErr != nil {
 		berr := w.navigationError(serviceCtx, navErr)
 		cancelAndKill()
 		cleanupFn()
-		return &models.BrowserResult{Status: models.StatusFailed, Error: berr}, nil, noop, noop
+		return &models.BrowserResult{Status: models.StatusFailed, Error: berr}, nil, noop, noop, nil
 	}
 
 	// Navigation succeeded; hand ownership of the browser context to the caller.
-	return nil, bCtx, cancelAndKill, cleanupFn
+	return nil, bCtx, cancelAndKill, cleanupFn, policy
 }
 
 // extractAfterInteraction performs page extraction on an already-navigated
 // Chromium context.  All destination-policy violations are checked again to
 // ensure any requests fired during the interactive phase are audited.
-func (w *Worker) extractAfterInteraction(browserCtx context.Context, req models.SessionRequest) *models.BrowserResult {
+func (w *Worker) extractAfterInteraction(browserCtx context.Context, req models.SessionRequest, policy *policyState) *models.BrowserResult {
 	fail := func(berr *models.BrowserError) *models.BrowserResult {
 		return &models.BrowserResult{Status: models.StatusFailed, Error: berr}
+	}
+	checkPolicy := func() *models.BrowserResult {
+		if policy != nil {
+			if berr := policy.violation(); berr != nil {
+				return fail(berr)
+			}
+		}
+		return nil
+	}
+
+	if res := checkPolicy(); res != nil {
+		return res
 	}
 
 	extractCtx, cancelExtract := context.WithTimeout(browserCtx, w.cfg.ExtractionTimeout)
 	title, finalURL, text, links, extractErr := extractPage(extractCtx, req.MaxTextChars)
 	cancelExtract()
 
+	if res := checkPolicy(); res != nil {
+		return res
+	}
 	if extractErr != nil {
 		return fail(models.NewError(models.CodeExtractionFailed, "page extraction failed"))
 	}
@@ -662,6 +683,9 @@ func (w *Worker) extractAfterInteraction(browserCtx context.Context, req models.
 		id, berr := w.screenshot(browserCtx)
 		if berr != nil {
 			return fail(berr)
+		}
+		if res := checkPolicy(); res != nil {
+			return res
 		}
 		result.ScreenshotArtifactID = id
 	}

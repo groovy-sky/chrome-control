@@ -101,8 +101,11 @@ Host browser
 noVNC web client  →  VNC server  →  virtual X display  →  Chromium inside container
 ```
 
-1. `POST /v1/sessions` – navigate to the URL and get a random opaque token.
-2. Open the noVNC URL in your host browser and interact with the page.
+1. `POST /v1/sessions` – either navigate to a supplied public HTTPS URL, or
+   omit `url` / pass `""` to start Chromium on `about:blank` for manual
+   browsing. (`url` remains required for `POST /v1/tasks`.)
+2. Open the noVNC URL in your host browser and interact with the page. If the
+   session started blank, type the destination into Chromium's address bar.
 3. `POST /v1/sessions/{token}/continue` – signal extraction to run.
 4. `GET /v1/sessions/{token}` – poll for the result, or read the JSON body
    returned by the `/continue` response (status `202 Accepted`; poll for the
@@ -113,7 +116,7 @@ noVNC web client  →  VNC server  →  virtual X display  →  Chromium inside 
 ### API flow
 
 ```sh
-# 1. Create a session
+# 1a. Create a session that pre-navigates to a public HTTPS URL
 TOKEN=$(curl -s -X POST http://127.0.0.1:8080/v1/sessions \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://example.com","capture_screenshot":false}' \
@@ -121,8 +124,16 @@ TOKEN=$(curl -s -X POST http://127.0.0.1:8080/v1/sessions \
 
 echo "Session token: $TOKEN"
 
+# 1b. Or create a blank session for manual browsing through noVNC
+BLANK_TOKEN=$(curl -s -X POST http://127.0.0.1:8080/v1/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"capture_screenshot":false}' \
+  | jq -r .token)
+
 # 2. (Open noVNC in host browser and interact with the page)
 #    http://127.0.0.1:6080/vnc.html
+#    If you used BLANK_TOKEN, Chromium starts on about:blank. Use the address
+#    bar inside noVNC to open a public HTTPS destination manually.
 
 # 3. Signal continuation (triggers extraction)
 curl -s -X POST "http://127.0.0.1:8080/v1/sessions/${TOKEN}/continue"
@@ -138,14 +149,16 @@ curl -s -X DELETE "http://127.0.0.1:8080/v1/sessions/${TOKEN}"
 
 | Status | Meaning |
 |--------|---------|
-| `waiting` | Session is live; Chromium is at the URL, waiting for `/continue` |
+| `waiting` | Session is live; Chromium is on the current page, waiting for `/continue` |
 | `completed` | Extraction finished successfully |
 | `failed` | Navigation, extraction, or a policy violation failed the session |
 | `cancelled` | Explicit cancellation or service shutdown |
 
 > **Policy enforcement:** All URL/DNS/request-interception protections remain
 > active throughout the interactive phase.  A policy violation during manual
-> browsing immediately fails and invalidates the session.
+> browsing immediately fails and invalidates the session. `about:blank` is used
+> only as the local blank bootstrap page when interactive `url` is omitted; it
+> does not broaden the allow-list for other top-level destinations.
 
 ---
 
@@ -238,15 +251,16 @@ docker run --rm \
 # 2. Wait for readiness
 until curl -sf http://127.0.0.1:8080/readyz > /dev/null; do sleep 1; done
 
-# 3. Create an interactive session
+# 3. Create an interactive session on a blank tab
 TOKEN=$(curl -s -X POST http://127.0.0.1:8080/v1/sessions \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com/captcha-page"}' \
+  -d '{"capture_screenshot":false}' \
   | jq -r .token)
 
 # 4. Open http://127.0.0.1:6080/vnc.html in your host browser
 #    (the web-root URL http://127.0.0.1:6080/ may return a harmless 404)
-#    Solve the CAPTCHA in the Chromium window shown by noVNC.
+#    Use Chromium's address bar inside noVNC to open a public HTTPS page such
+#    as https://example.com/captcha-page, then solve the CAPTCHA there.
 #    (noVNC displays the container's Chromium – it is NOT a tab in your
 #    local Chrome; your mouse/keyboard events are forwarded to the container.)
 

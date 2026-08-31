@@ -134,15 +134,15 @@ func TestSessionManager_ConcurrencyLimit(t *testing.T) {
 
 // ----- invalid request -----
 
-func TestSessionManager_Create_EmptyURL(t *testing.T) {
+func TestSessionManager_Create_EmptyURLStartsBlankSession(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(5*time.Minute, 2)
-	_, berr := mgr.Create(models.SessionRequest{})
-	if berr == nil {
-		t.Fatal("expected error for empty URL, got nil")
+	tok, berr := mgr.Create(models.SessionRequest{})
+	if berr != nil {
+		t.Fatalf("expected empty URL to be accepted, got %v", berr)
 	}
-	if berr.Code != models.CodeInvalidRequest {
-		t.Fatalf("expected %s, got %s", models.CodeInvalidRequest, berr.Code)
+	if tok == "" {
+		t.Fatal("expected non-empty token")
 	}
 }
 

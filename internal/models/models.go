@@ -13,6 +13,9 @@ type BrowserRequest struct {
 
 // SessionRequest is the POST /v1/sessions request body.
 type SessionRequest struct {
+	// URL is optional for interactive sessions only. When omitted or empty,
+	// Chromium starts on about:blank and waits for manual navigation through
+	// noVNC. When provided, it must still satisfy the normal destination policy.
 	URL               string `json:"url"`
 	CaptureScreenshot bool   `json:"capture_screenshot"`
 	MaxTextChars      int    `json:"max_text_chars"`
