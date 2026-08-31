@@ -56,7 +56,7 @@ Environment variables:
 | `CHROME_PATH` | *(auto-detect)* | Chromium executable path |
 | `HEADFUL` | `false` | Launch Chromium with a visible window (**local debugging only**; requires `DISPLAY`) |
 | `DEBUG_HOLD_SECONDS` | `0` | Seconds to keep the Chromium window open after a task completes (**local debugging only**) |
-| `INTERACTIVE_TIMEOUT_SECONDS` | `300` | Maximum time (seconds) a session waits for `continue` before timing out |
+| `INTERACTIVE_TIMEOUT_SECONDS` | `3600` | Maximum time (seconds) a session waits for `continue` before timing out |
 | `MAX_INTERACTIVE_SESSIONS` | `2` | Maximum number of concurrent interactive sessions |
 
 > ⚠️ **`HEADFUL` and `DEBUG_HOLD_SECONDS` are intended for local debugging only.**
@@ -216,7 +216,7 @@ All base-image variables apply, plus:
 |----------|---------|-------------|
 | `NOVNC_PORT` | `6080` | Port the noVNC web interface listens on |
 | `DISPLAY` | `:99` | Virtual X display used by Chromium |
-| `INTERACTIVE_TIMEOUT_SECONDS` | `300` | Session timeout in seconds |
+| `INTERACTIVE_TIMEOUT_SECONDS` | `3600` | Session timeout in seconds |
 | `MAX_INTERACTIVE_SESSIONS` | `2` | Max concurrent interactive sessions |
 
 ### Full CAPTCHA workflow example
