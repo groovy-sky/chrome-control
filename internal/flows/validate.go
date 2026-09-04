@@ -40,7 +40,7 @@ var stepsRequiringURL = map[string]bool{
 	StepAssertURL: true,
 }
 
-// stepsRequiringValue are step types for which Value is meaningful. An empty
+// stepsAllowingValue are step types for which Value is meaningful. An empty
 // Value is still permitted (e.g. "fill" can clear a field).
 var stepsAllowingValue = map[string]bool{
 	StepFill:   true,

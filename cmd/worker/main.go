@@ -252,7 +252,7 @@ func (s *server) handleFlowRun(w http.ResponseWriter, r *http.Request) {
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()
 	default:
-		writeFlowError(w, "", models.NewError(models.CodeOverloaded, "concurrent task limit reached"),
+		writeFlowError(w, "", models.NewError(models.CodeOverloaded, "concurrent request limit reached"),
 			http.StatusServiceUnavailable)
 		return
 	}

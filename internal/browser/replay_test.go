@@ -11,7 +11,7 @@ import (
 	"github.com/groovy-sky/chrome-control/internal/models"
 )
 
-// denyAllResolver rejects every hostname resolution, used to exercise the
+// denyAllReplayResolver rejects every hostname resolution, used to exercise the
 // destination-policy pre-check without ever launching a real Chromium binary.
 type denyAllReplayResolver struct{}
 
