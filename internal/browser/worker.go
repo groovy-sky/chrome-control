@@ -77,6 +77,9 @@ type Config struct {
 	BrowserStartTimeout time.Duration
 	NavigationTimeout   time.Duration
 	ExtractionTimeout   time.Duration
+	// FlowTimeout bounds an entire flow replay run (RunFlow). Individual step
+	// timeouts can only shorten, never extend, this deadline.
+	FlowTimeout time.Duration
 }
 
 func (c *Config) withDefaults() {
@@ -97,6 +100,9 @@ func (c *Config) withDefaults() {
 	}
 	if c.ExtractionTimeout <= 0 {
 		c.ExtractionTimeout = DefaultExtractionTimeout
+	}
+	if c.FlowTimeout <= 0 {
+		c.FlowTimeout = DefaultFlowTimeout
 	}
 }
 
