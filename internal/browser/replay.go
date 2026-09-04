@@ -59,6 +59,7 @@ func (w *Worker) RunFlow(ctx context.Context, req flows.RunRequest) *flows.RunRe
 	started := time.Now()
 	runID, err := GenerateToken()
 	if err != nil {
+		w.cfg.Logger.Debug("run id generation failed", slog.String("error", err.Error()))
 		runID = ""
 	}
 	result := w.runFlow(ctx, runID, req)

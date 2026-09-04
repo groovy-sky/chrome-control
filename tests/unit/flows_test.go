@@ -254,7 +254,7 @@ func TestValidate_StartURLValidatedLikeNavigate(t *testing.T) {
 	}
 }
 
-func TestValidate_SelectRequiresLocatorButAllowsEmptyValue(t *testing.T) {
+func TestValidate_SelectAllowsEmptyValue(t *testing.T) {
 	t.Parallel()
 	f := validFlow()
 	f.Steps = append(f.Steps, flows.Step{
@@ -265,6 +265,20 @@ func TestValidate_SelectRequiresLocatorButAllowsEmptyValue(t *testing.T) {
 	})
 	if berr := flows.Validate(&f); berr != nil {
 		t.Fatalf("expected select with empty value to be valid, got %+v", berr)
+	}
+}
+
+func TestValidate_MissingLocatorForSelect(t *testing.T) {
+	t.Parallel()
+	f := validFlow()
+	f.Steps = append(f.Steps, flows.Step{
+		ID:    "s5",
+		Type:  flows.StepSelect,
+		Value: "France",
+	})
+	berr := flows.Validate(&f)
+	if berr == nil {
+		t.Fatal("expected error for select step without a locator")
 	}
 }
 
