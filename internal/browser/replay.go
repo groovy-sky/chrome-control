@@ -294,6 +294,11 @@ func (w *Worker) executeStep(browserCtx context.Context, step flows.Step, policy
 			res.ScreenshotArtifactID = id
 		}
 	default:
+		// Defensive fallback only: flows.Validate rejects any step type not
+		// in validStepTypes before RunFlow ever calls executeStep, so this
+		// branch should be unreachable in normal request handling. It guards
+		// against future callers that construct a flows.Step without going
+		// through Validate first.
 		berr = models.NewError(models.CodeFlowStepFailed, "unsupported step type")
 	}
 

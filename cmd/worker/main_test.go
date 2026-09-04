@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +19,7 @@ import (
 // must be arranged so validation fails or the slot is unavailable first.
 func newTestServer(maxConcurrent int) *server {
 	return &server{
-		logger: slog.New(slog.NewTextHandler(nil, &slog.HandlerOptions{Level: slog.LevelError + 100})),
+		logger: slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError})),
 		slots:  make(chan struct{}, maxConcurrent),
 	}
 }
