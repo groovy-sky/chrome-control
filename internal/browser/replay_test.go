@@ -48,7 +48,7 @@ func TestCSSSelector(t *testing.T) {
 func TestClassifyStepError_PassesThroughBrowserError(t *testing.T) {
 	t.Parallel()
 	original := models.NewError(models.CodeScreenshotFailed, "screenshot could not be stored")
-	got := classifyStepError(context.Background(), original)
+	got := classifyStepError(context.Background(), original, nil)
 	if got != original {
 		t.Fatalf("expected original *BrowserError to pass through unchanged, got %+v", got)
 	}
@@ -60,7 +60,7 @@ func TestClassifyStepError_TimeoutMapsToFlowStepFailed(t *testing.T) {
 	defer cancel()
 	<-ctx.Done()
 
-	got := classifyStepError(ctx, errors.New("some chromedp failure"))
+	got := classifyStepError(ctx, errors.New("some chromedp failure"), nil)
 	if got.Code != models.CodeFlowStepFailed {
 		t.Fatalf("expected %s, got %s", models.CodeFlowStepFailed, got.Code)
 	}
@@ -68,7 +68,7 @@ func TestClassifyStepError_TimeoutMapsToFlowStepFailed(t *testing.T) {
 
 func TestClassifyStepError_GenericFailureMapsToFlowStepFailed(t *testing.T) {
 	t.Parallel()
-	got := classifyStepError(context.Background(), errors.New("some chromedp failure"))
+	got := classifyStepError(context.Background(), errors.New("some chromedp failure"), nil)
 	if got.Code != models.CodeFlowStepFailed {
 		t.Fatalf("expected %s, got %s", models.CodeFlowStepFailed, got.Code)
 	}

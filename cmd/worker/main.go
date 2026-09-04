@@ -241,6 +241,10 @@ func (s *server) handleFlowRun(w http.ResponseWriter, r *http.Request) {
 			http.StatusBadRequest)
 		return
 	}
+	// Validate before acquiring a concurrency slot, mirroring handleTask's
+	// use of browser.ValidateRequest above: this lets malformed requests
+	// fail fast without consuming a scarce slot. RunFlow performs the same
+	// validation again so that non-HTTP callers of RunFlow are covered too.
 	if berr := flows.Validate(&req.Flow); berr != nil {
 		writeFlowError(w, "", berr, models.HTTPStatusForCode(berr.Code))
 		return

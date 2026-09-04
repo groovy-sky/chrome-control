@@ -243,7 +243,7 @@ func (w *Worker) executeStep(browserCtx context.Context, step flows.Step, policy
 	switch step.Type {
 	case flows.StepNavigate:
 		if err := chromedp.Run(stepCtx, chromedp.Navigate(step.URL)); err != nil {
-			berr = classifyStepError(stepCtx, err)
+			berr = classifyStepError(stepCtx, err, w.cfg.Logger)
 		}
 	case flows.StepClick:
 		sel := cssSelector(step.Locator)
@@ -251,7 +251,7 @@ func (w *Worker) executeStep(browserCtx context.Context, step flows.Step, policy
 			chromedp.WaitVisible(sel, chromedp.ByQuery),
 			chromedp.Click(sel, chromedp.ByQuery),
 		); err != nil {
-			berr = classifyStepError(stepCtx, err)
+			berr = classifyStepError(stepCtx, err, w.cfg.Logger)
 		}
 	case flows.StepFill:
 		sel := cssSelector(step.Locator)
@@ -260,7 +260,7 @@ func (w *Worker) executeStep(browserCtx context.Context, step flows.Step, policy
 			chromedp.Clear(sel, chromedp.ByQuery),
 			chromedp.SendKeys(sel, step.Value, chromedp.ByQuery),
 		); err != nil {
-			berr = classifyStepError(stepCtx, err)
+			berr = classifyStepError(stepCtx, err, w.cfg.Logger)
 		}
 	case flows.StepSelect:
 		sel := cssSelector(step.Locator)
@@ -268,17 +268,17 @@ func (w *Worker) executeStep(browserCtx context.Context, step flows.Step, policy
 			chromedp.WaitVisible(sel, chromedp.ByQuery),
 			selectOption(sel, step.Value, chromedp.ByQuery),
 		); err != nil {
-			berr = classifyStepError(stepCtx, err)
+			berr = classifyStepError(stepCtx, err, w.cfg.Logger)
 		}
 	case flows.StepWaitVisible, flows.StepAssertVisible:
 		sel := cssSelector(step.Locator)
 		if err := chromedp.Run(stepCtx, chromedp.WaitVisible(sel, chromedp.ByQuery)); err != nil {
-			berr = classifyStepError(stepCtx, err)
+			berr = classifyStepError(stepCtx, err, w.cfg.Logger)
 		}
 	case flows.StepAssertURL:
 		var currentURL string
 		if err := chromedp.Run(stepCtx, chromedp.Location(&currentURL)); err != nil {
-			berr = classifyStepError(stepCtx, err)
+			berr = classifyStepError(stepCtx, err, w.cfg.Logger)
 		} else if currentURL != step.URL {
 			// assert_url uses an exact-match comparison against the
 			// current URL as reported by the browser (see README).
@@ -325,13 +325,16 @@ func (w *Worker) executeStep(browserCtx context.Context, step flows.Step, policy
 // classifyStepError converts a chromedp/context error into a
 // *models.BrowserError without leaking step field values (e.g. fill values)
 // into the message.
-func classifyStepError(ctx context.Context, err error) *models.BrowserError {
+func classifyStepError(ctx context.Context, err error, logger *slog.Logger) *models.BrowserError {
 	var berr *models.BrowserError
 	if errors.As(err, &berr) {
 		return berr
 	}
 	if ctx.Err() != nil {
 		return models.NewError(models.CodeFlowStepFailed, "step timed out before completing")
+	}
+	if logger != nil {
+		logger.Debug("flow step execution error", slog.String("error", err.Error()))
 	}
 	return models.NewError(models.CodeFlowStepFailed, "step execution failed")
 }
