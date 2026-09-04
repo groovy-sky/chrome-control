@@ -155,6 +155,7 @@ func (w *Worker) runFlow(ctx context.Context, runID string, req flows.RunRequest
 	if req.Flow.StartURL != "" {
 		stepRes := w.executeStep(browserCtx, flows.Step{ID: "start_url", Type: flows.StepNavigate, URL: req.Flow.StartURL}, policy)
 		if stepRes.Status == flows.StepStatusFailed {
+			result.Steps = append(result.Steps, stepRes)
 			result.Status = models.StatusFailed
 			result.Error = stepRes.Error
 			w.recordFinalURL(browserCtx, result)
