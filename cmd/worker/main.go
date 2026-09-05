@@ -19,6 +19,7 @@ import (
 	"github.com/groovy-sky/chrome-control/internal/artifacts"
 	"github.com/groovy-sky/chrome-control/internal/browser"
 	"github.com/groovy-sky/chrome-control/internal/envutil"
+	"github.com/groovy-sky/chrome-control/internal/flows"
 	"github.com/groovy-sky/chrome-control/internal/models"
 )
 
@@ -81,6 +82,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/tasks", srv.handleTask)
+	mux.HandleFunc("POST /v1/flows/run", srv.handleFlowRun)
 	mux.HandleFunc("POST /v1/sessions", srv.handleCreateSession)
 	mux.HandleFunc("GET /v1/sessions/{token}", srv.handleGetSession)
 	mux.HandleFunc("POST /v1/sessions/{token}/continue", srv.handleContinueSession)
@@ -212,6 +214,90 @@ func (s *server) handleTask(w http.ResponseWriter, r *http.Request) {
 		status = models.HTTPStatusForCode(result.Error.Code)
 	}
 	writeJSON(w, status, result)
+}
+
+// handleFlowRun handles POST /v1/flows/run: a stateless record-and-replay
+// flow execution. The flow document is supplied directly in the request
+// body; there is no persistent storage, listing, or recording endpoint.
+func (s *server) handleFlowRun(w http.ResponseWriter, r *http.Request) {
+	if !validJSONContentType(r.Header.Get("Content-Type")) {
+		writeFlowError(w, "", models.NewError(models.CodeInvalidRequest, "Content-Type must be application/json"),
+			http.StatusUnsupportedMediaType)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	var req flows.RunRequest
+	if err := dec.Decode(&req); err != nil {
+		writeFlowError(w, "", models.NewError(models.CodeInvalidRequest, "request body is not valid JSON for this API"),
+			http.StatusBadRequest)
+		return
+	}
+	if dec.More() {
+		writeFlowError(w, "", models.NewError(models.CodeInvalidRequest, "request body must contain a single JSON object"),
+			http.StatusBadRequest)
+		return
+	}
+	// Validate before acquiring a concurrency slot, mirroring handleTask's
+	// use of browser.ValidateRequest above: this lets malformed requests
+	// fail fast without consuming a scarce slot. RunFlow performs the same
+	// validation again so that non-HTTP callers of RunFlow are covered too.
+	if berr := flows.Validate(&req.Flow); berr != nil {
+		writeFlowError(w, "", berr, models.HTTPStatusForCode(berr.Code))
+		return
+	}
+
+	// Bounded concurrency: overload fails fast, there is no queue. Flow runs
+	// share the same slot pool as plain tasks.
+	select {
+	case s.slots <- struct{}{}:
+		defer func() { <-s.slots }()
+	default:
+		writeFlowError(w, "", models.NewError(models.CodeOverloaded, "concurrent request limit reached"),
+			http.StatusServiceUnavailable)
+		return
+	}
+
+	s.inFlight.Add(1)
+	defer s.inFlight.Add(-1)
+
+	// The run is cancelled as soon as the client disconnects.
+	result := s.worker.RunFlow(r.Context(), req)
+
+	// Screenshots are retained only until the response has been written.
+	var artifactIDs []string
+	if result.FinalScreenshotArtifactID != "" {
+		artifactIDs = append(artifactIDs, result.FinalScreenshotArtifactID)
+	}
+	for _, step := range result.Steps {
+		if step.ScreenshotArtifactID != "" {
+			artifactIDs = append(artifactIDs, step.ScreenshotArtifactID)
+		}
+	}
+	defer func() {
+		for _, id := range artifactIDs {
+			if err := s.store.Delete(id); err != nil {
+				s.logger.Error("could not delete artifact", slog.String("error", err.Error()))
+			}
+		}
+	}()
+
+	status := http.StatusOK
+	if result.Error != nil {
+		status = models.HTTPStatusForCode(result.Error.Code)
+	}
+	writeJSON(w, status, result)
+}
+
+func writeFlowError(w http.ResponseWriter, runID string, berr *models.BrowserError, status int) {
+	writeJSON(w, status, &flows.RunResult{
+		RunID:  runID,
+		Status: models.StatusFailed,
+		Error:  berr,
+	})
 }
 
 func validJSONContentType(value string) bool {

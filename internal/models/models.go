@@ -89,6 +89,10 @@ const (
 	CodeOverloaded            = "overloaded"
 	CodeSessionNotFound       = "session_not_found"
 	CodeSessionExpired        = "session_expired"
+	// CodeFlowStepFailed is returned when a flow step fails during replay,
+	// e.g. a locator never becomes visible, or an assertion does not hold.
+	// Flow document validation errors use CodeInvalidRequest instead.
+	CodeFlowStepFailed = "flow_step_failed"
 )
 
 // HTTPStatusForCode maps an error code to the HTTP status defined by the API
@@ -112,6 +116,8 @@ func HTTPStatusForCode(code string) int {
 		return 504
 	case CodeBrowserStartFailed, CodeExtractionFailed, CodeScreenshotFailed:
 		return 500
+	case CodeFlowStepFailed:
+		return 422
 	default:
 		return 500
 	}

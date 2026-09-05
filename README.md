@@ -68,6 +68,7 @@ Environment variables:
 
 ```
 POST   /v1/tasks                       – submit a browsing task
+POST   /v1/flows/run                   – validate and replay a record-and-replay flow (stateless)
 POST   /v1/sessions                    – create an interactive session
 GET    /v1/sessions/{token}            – get session status / result
 POST   /v1/sessions/{token}/continue   – signal the session to extract and return
@@ -159,6 +160,142 @@ curl -s -X DELETE "http://127.0.0.1:8080/v1/sessions/${TOKEN}"
 > browsing immediately fails and invalidates the session. `about:blank` is used
 > only as the local blank bootstrap page when interactive `url` is omitted; it
 > does not broaden the allow-list for other top-level destinations.
+
+---
+
+## Flows (record-and-replay MVP)
+
+`POST /v1/flows/run` replays a declarative, versioned JSON flow document
+against a fresh, isolated Chromium instance and returns per-step diagnostics.
+This is a native, minimal Selenium-like record-and-replay MVP — it is **not**
+a W3C WebDriver server, has **no** browser extension or recording UI, uses
+**no** persistent profiles, and never executes LLM- or client-supplied
+arbitrary JavaScript.
+
+### Security boundary
+
+A flow run uses exactly the same hardened execution path as `/v1/tasks`:
+
+- Every `navigate` URL (the flow's `start_url` and every `navigate` step) is
+  validated against the public-HTTPS destination policy before Chromium is
+  launched, where feasible; the very first navigation is checked before the
+  browser process even starts.
+- Every browser request — including subsequent in-flow navigations, redirects,
+  frames, and sub-resources — is intercepted and validated exactly as it is
+  for a plain task. A destination-policy violation fails the run closed.
+- Each run gets its own temporary Chromium profile and process, destroyed on
+  completion, with the sandbox always enabled.
+- The run is bounded by an overall flow timeout; a step's own `timeout_ms` can
+  only shorten, never extend, that deadline.
+- Fill values are never logged.
+
+### Flow document
+
+```json
+{
+  "version": 1,
+  "name": "login",
+  "start_url": "https://example.com/login",
+  "steps": [
+    {"id": "user", "type": "fill", "locator": {"strategy": "css", "value": "#username"}, "value": "alice"},
+    {"id": "pass", "type": "fill", "locator": {"strategy": "css", "value": "#password"}, "value": "hunter2"},
+    {"id": "go", "type": "click", "locator": {"strategy": "css", "value": "#submit"}},
+    {"id": "loaded", "type": "wait_visible", "locator": {"strategy": "css", "value": "#dashboard"}},
+    {"id": "check", "type": "assert_url", "url": "https://example.com/dashboard"}
+  ]
+}
+```
+
+- `version` must equal `1`.
+- `name` and every step `id` are 1-200 / 1-100 characters and step `id`s must
+  be unique within a flow.
+- `start_url` is optional when the first step is itself a `navigate` step.
+- Every step optionally accepts `timeout_ms` (100-30000); it defaults to 5000.
+
+### Supported step types
+
+| Type | Requires | Behavior |
+|------|----------|----------|
+| `navigate` | `url` | `chromedp.Navigate` to `url` |
+| `click` | `locator` | Wait for the target to become visible, then click it |
+| `fill` | `locator`, `value` | Wait for visible, clear the existing value, then type `value`. Only `<input>`/`<textarea>` elements are supported |
+| `select` | `locator`, `value` | Select an option on an HTML `<select>` element by matching `value` against the option's `value` **or** its visible text |
+| `wait_visible` | `locator` | Wait for the target to become visible |
+| `assert_visible` | `locator` | Fail if the target does not become visible within the effective timeout |
+| `assert_url` | `url` | Fail unless the current URL is an **exact match** of `url` (no prefix/wildcard matching) |
+| `screenshot` | – | Capture and store a PNG screenshot checkpoint; requires artifact storage to be configured |
+
+### Locator strategies
+
+Locators are restricted to an allow-list; there is no XPath or arbitrary
+JavaScript locator strategy.
+
+| Strategy | `value` means | Resolved as |
+|----------|----------------|-------------|
+| `css` | A CSS selector | Used directly |
+| `id` | An element's `id` attribute | `[id="value"]` |
+| `name` | An element's `name` attribute | `[name="value"]` |
+
+`css` selectors and `fill`/`select` values are bounded (500 and 4096
+characters respectively) and must not be empty for `css`/`id`/`name` values.
+
+### Example request
+
+```sh
+curl -X POST http://localhost:8080/v1/flows/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "flow": {
+      "version": 1,
+      "name": "login",
+      "start_url": "https://example.com/login",
+      "steps": [
+        {"id": "user", "type": "fill", "locator": {"strategy": "css", "value": "#username"}, "value": "alice"},
+        {"id": "go", "type": "click", "locator": {"strategy": "css", "value": "#submit"}},
+        {"id": "check", "type": "assert_url", "url": "https://example.com/dashboard"}
+      ]
+    },
+    "capture_screenshot": true
+  }'
+```
+
+### Response
+
+```json
+{
+  "run_id": "5f2c…",
+  "status": "completed",
+  "final_url": "https://example.com/dashboard",
+  "steps": [
+    {"id": "user", "type": "fill", "status": "completed", "duration_ms": 42},
+    {"id": "go", "type": "click", "status": "completed", "duration_ms": 88},
+    {"id": "check", "type": "assert_url", "status": "completed", "duration_ms": 5}
+  ],
+  "final_screenshot_artifact_id": "a1b2…"
+}
+```
+
+On a step failure, the run stops, `status` becomes `"failed"`, the failing
+step's entry carries a `screenshot_artifact_id` when artifact storage is
+configured (a best-effort diagnostic screenshot), and the top-level `error`
+mirrors the failing step's error. As with `/v1/tasks`, screenshots are kept
+on disk only until the JSON response has been written, then deleted.
+
+### Limitations (MVP)
+
+- **No recording UI or browser extension.** Flows must be authored as JSON by
+  hand or by another tool; there is no "record my clicks" capability yet.
+- **No W3C WebDriver server.** The API is a purpose-built HTTP endpoint, not a
+  WebDriver-compatible remote end.
+- **No credentials should be stored in flow JSON.** Flow documents are not
+  encrypted at rest and are logged only at the step-type/duration level
+  (never `fill` values); treat any flow containing secrets as sensitive.
+- **No persistent browser profiles or session reuse.** Every run gets a fresh,
+  temporary Chromium profile, exactly like `/v1/tasks`.
+- **Stateless only.** `/v1/flows/run` does not store, list, or replay a
+  previously submitted flow; the full document is required on every request.
+- Flows must target public HTTPS pages permitted by the existing destination
+  policy; this endpoint cannot be used to reach internal/private services.
 
 ---
 
@@ -383,6 +520,7 @@ Error codes mirror those from the HTTP API:
 | `screenshot_failed` | Screenshot capture or storage failed |
 | `task_timeout` | Hard task timeout exceeded |
 | `overloaded` | (HTTP only) concurrent-task limit reached |
+| `flow_step_failed` | (HTTP only, `/v1/flows/run`) a flow step failed to complete (e.g. locator never became visible, or an assertion did not hold) |
 
 ### MCP client configuration (Claude Desktop example)
 
